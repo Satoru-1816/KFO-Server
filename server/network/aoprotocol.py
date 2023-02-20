@@ -122,8 +122,8 @@ class AOProtocol(asyncio.Protocol):
             self.server.config["timeout"], self.client.disconnect
         )
 
-        # Idk why AO2 even expects a decryptor packet but here we are
-        self.client.send_command("decryptor", 34)
+        # Disables fantacrypt for clients older than 2.9, required for A02-Client to send HDID.
+        self.client.send_command("decryptor", "NOENCRYPT")
 
     def connection_lost(self, exc):
         """User disconnected
@@ -237,15 +237,14 @@ class AOProtocol(asyncio.Protocol):
 
         # Get the list of version vars, making sure the size of the least is at least 3 args
         verlist = self.client.version.split('.')
-        verlist = verlist + ([""] * min(0, 3 - len(verlist)))
+        if len(verlist) == 3:
+            # Get the version string
+            release, major, minor = verlist
 
-        # Get the version string
-        release, major, minor = verlist
-
-        # If we have someone joining with clients 2.8 and above
-        if int(release) >= 2 and int(major) >= 8:
-            # Let them hear ambience
-            self.client.has_multilayer_audio = True
+            # If we have someone joining with clients 2.8 and above
+            if int(release) >= 2 and int(major) >= 8:
+                # Let them hear ambience
+                self.client.has_multilayer_audio = True
 
         # If we have someone using the DRO 1.1.0 Client joining
         # if self.client.version.startswith("1.1.0"):
@@ -296,14 +295,15 @@ class AOProtocol(asyncio.Protocol):
         """
 
         song_list = []
-        if not self.client.area.area_manager.arup_enabled:
-            song_list = [
-                f"[HUB: {self.client.area.area_manager.id}] {self.client.area.area_manager.name}\n Double-Click me to see Hubs\n  _______"
-            ]
-        else:
-            song_list = [
-                f"[HUB: {self.client.area.area_manager.id}] {self.client.area.area_manager.name}"
-            ]
+        if len(self.client.server.hub_manager.hubs) > 1:
+            if not self.client.area.area_manager.arup_enabled:
+                song_list = [
+                    f"🌍[{self.client.area.area_manager.id}] {self.client.area.area_manager.name}\n Double-Click me to see Hubs\n  _______"
+                ]
+            else:
+                song_list = [
+                    f"🌍[{self.client.area.area_manager.id}] {self.client.area.area_manager.name}"
+                ]
         allowed = self.client.is_mod or self.client in self.client.area.owners
         area_list = self.client.get_area_list(allowed, allowed)
         self.client.local_area_list = area_list
@@ -605,6 +605,7 @@ class AOProtocol(asyncio.Protocol):
                 "Showname changes are forbidden in this area!")
             return
         if self.client.area.is_iniswap(self.client, pre, anim, folder, sfx):
+            folder = self.client.char_name
             self.client.send_ooc(
                 f"Iniswap/custom emotes are blocked in this area for character {folder}, pre {pre} anim {anim}."
             )
@@ -613,27 +614,48 @@ class AOProtocol(asyncio.Protocol):
             self.client.send_ooc(
                 "You may not iniswap while you are charcursed!")
             return
-        if (
-            not self.client.area.blankposting_allowed
-            and not self.client.is_mod
-            and not (self.client in self.client.area.owners)
-        ):
-            if text.strip() == "":
-                self.client.send_ooc("Blankposting is forbidden in this area!")
-                return
-            # Regex is slow as hell, need to change this to be more performant
-            if (
-                len(re.sub(r"[{}\\`|(~~)]", "", text).replace(" ", "")) < 3
-                and not text.startswith("<")
-                and not text.startswith(">")
-            ):
-                self.client.send_ooc(
-                    "While that is not a blankpost, it is still pretty spammy. Try forming sentences."
-                )
-                return
+        if (self.server.config["block_relative"]):
+            pre = pre.replace(
+                "../", "").replace("/..", "").replace("..\\", "").replace("\\..", "")
+            anim = anim.replace(
+                "../", "").replace("/..", "").replace("..\\", "").replace("\\..", "")
+            folder = folder.replace(
+                "../", "").replace("/..", "").replace("..\\", "").replace("\\..", "")
+            sfx = sfx.replace(
+                "../", "").replace("/..", "").replace("..\\", "").replace("\\..", "")
+            pos = pos.replace(
+                "../", "").replace("/..", "").replace("..\\", "").replace("\\..", "")
+            frames_shake = frames_shake.replace(
+                "../", "").replace("/..", "").replace("..\\", "").replace("\\..", "")
+            frames_realization = frames_realization.replace(
+                "../", "").replace("/..", "").replace("..\\", "").replace("\\..", "")
+            frames_sfx = frames_sfx.replace(
+                "../", "").replace("/..", "").replace("..\\", "").replace("\\..", "")
+            effect = effect.replace(
+                "../", "").replace("/..", "").replace("..\\", "").replace("\\..", "")
+
+        if not self.client.is_mod and not (self.client in self.client.area.owners):
+            if not self.client.area.blankposting_allowed:
+                # Regex is slow as hell, need to change this to be more performant
+                if text.strip() == "" or (
+                    len(re.sub(r"[{}\\`|(~~)]", "", text).replace(" ", "")) < 3
+                    and not text.startswith("<")
+                    and not text.startswith(">")
+                ):
+                    self.client.send_ooc(
+                        "Blankposting is forbidden in this area!"
+                    )
+                    return
+            elif self.client.area.blankposting_forced:
+                if text.strip() != "":
+                    self.client.send_ooc(
+                        "You can only blankpost in this area!"
+                    )
+                    return
+
         if text.replace(" ", "").startswith("(("):
             self.client.send_ooc(
-                "Please, *please* use the OOC chat instead of polluting IC. Normal OOC is local to area. You can use /g to talk across the entire server."
+                "Please, *please* use the OOC chat instead of polluting IC. Normal OOC is local to area. You can use /h to talk across the hub, or /g to talk across the entire server."
             )
             return
         # Scrub text and showname for bad words
@@ -816,9 +838,6 @@ class AOProtocol(asyncio.Protocol):
         if self.client.blankpost:
             pre = "-"
             anim = "misc/blank"
-        # We're narrating, or we're hidden in some evidence.
-        if self.client.narrator or self.client.hidden_in is not None:
-            anim = ""
 
         if pos != "" and self.client.pos != pos:
             try:
@@ -830,30 +849,37 @@ class AOProtocol(asyncio.Protocol):
         if self.client.area.dark:
             pos = self.client.area.pos_dark
 
-        if text.lower().startswith("/w ") or text.lower().startswith("[w] "):
+        # We're narrating, or we're hidden in some evidence.
+        if anim == "" or self.client.narrator or self.client.hidden_in is not None:
+            # Reuse same pos
+            pos = ""
+            # Set anim to narration
+            anim = ""
+
+        if text.lower().lstrip().startswith("/w"):
             if (
                 not self.client.area.can_whisper
                 and not self.client.is_mod
-                and self.client in self.client.area.owners
+                and self.client not in self.client.area.owners
             ):
                 self.client.send_ooc("You can't whisper in this area!")
                 return
-            part = text.split(" ")
+            text = text.lstrip()[2:]
+            part = text.lstrip().split(" ")
             try:
-                clients = part[1].split(",")
+                clients = list(dict.fromkeys(part[0].split(",")))
                 try:
                     [int(c) for c in clients]
                 except ValueError:
                     clients = []
 
                 if len(clients) > 0:
-                    part = part[2:]
+                    part = part[1:]
                     whisper_clients = [
-                        c for c in self.client.area.clients if str(c.id) in clients
+                        c for c in self.client.area.clients if str(c.id) in clients and not c == self.client
                     ]
                     clients = ",".join(clients)
                 else:
-                    part = part[1:]
                     whisper_clients = [
                         c
                         for c in self.client.area.clients
@@ -900,7 +926,7 @@ class AOProtocol(asyncio.Protocol):
                     self.client.send_ooc(
                         f"You discover {c.showname} in the {evi.name}!")
 
-                if evi.pos != "all":
+                if area.present_reveals_evidence and evi.pos != "all":
                     evi.desc = f"(👀Discovered in pos: {evi.pos})\n{evi.desc}"
                     evi.pos = "all"
                     area.broadcast_evidence_list()
@@ -964,9 +990,7 @@ class AOProtocol(asyncio.Protocol):
             for client in self.client.area.clients:
                 if client in whisper_clients:
                     continue
-                if client in self.client.area.owners:
-                    whisper_clients.append(client)
-                if client.is_mod:
+                if client.is_mod or client in self.client.area.owners:
                     whisper_clients.append(client)
 
         if len(target_area) > 0:
@@ -988,11 +1012,12 @@ class AOProtocol(asyncio.Protocol):
                     if len(a.pos_lock) > 0:
                         tempos = a.pos_lock[0]
                     if a.last_ic_message is not None and (
-                        anim == ""
-                        or len(a.pos_lock) <= 0
-                        or a.last_ic_message[5] in a.pos_lock
+                        anim == "" or
+                        len(a.pos_lock) <= 0
+                        or a.last_ic_message[5] not in a.pos_lock
                     ):
-                        tempos = a.last_ic_message[5]  # Use the same pos
+                        # Use the same pos
+                        tempos = a.last_ic_message[5]
                         # Use the same desk mod
                         tempdeskmod = a.last_ic_message[0]
                     a.send_command(
@@ -1091,7 +1116,7 @@ class AOProtocol(asyncio.Protocol):
                     and self.client.area.id == self.server.bridgebot.area_id
                 ):
                     webname = self.client.char_name
-                    if showname != "" and showname != self.area.area_manager.char_list[cid]:
+                    if showname != "" and showname != self.client.area.area_manager.char_list[cid]:
                         webname = f"{showname} ({webname})"
                     # you'll hate me for this
                     text = (
@@ -1123,74 +1148,6 @@ class AOProtocol(asyncio.Protocol):
                     self.server.bridgebot.queue_message(
                         webname, text, self.client.char_name, anim
                     )
-            # Minigames
-            opposing_team = None
-            # If we're not using shouts, and we're in CS/Scrum/PTA
-            if button == "0":
-                # If we're on red team
-                if self.client.char_id in self.client.area.red_team:
-                    # Set our color to red
-                    color = 2
-                    # Offset us to the left
-                    offset_pair = -25
-                    # Offset them to the right
-                    other_offset = 25
-                    # Set our pos to "debate"
-                    pos = "debate"
-                    # Our opposing team is blue
-                    opposing_team = self.client.area.blue_team
-                # If we're on blue team
-                elif self.client.char_id in self.client.area.blue_team:
-                    # Set our color to cyan
-                    color = 7
-                    # Offset them to the right
-                    offset_pair = 25
-                    # Offset them to the left
-                    other_offset = -25
-                    # Set our pos to "debate"
-                    pos = "debate"
-                    # Our opposing team is red
-                    opposing_team = self.client.area.red_team
-
-            # We're in a minigame w/ team setups
-            if opposing_team is not None:
-                charid_pair = -1
-                # Last speaker is us and our message already paired us with someone, and that someone is on the opposing team
-                if (
-                    self.client.area.last_ic_message is not None
-                    and self.client.area.last_ic_message[8] == self.client.char_id
-                    and self.client.area.last_ic_message[16] != -1
-                    and int(self.client.area.last_ic_message[16].split("^")[0])
-                    in opposing_team
-                ):
-                    # Set the pair to the person who it was last msg
-                    charid_pair = int(
-                        self.client.area.last_ic_message[16].split("^")[0]
-                    )
-                # The person we were trying to find is no longer on the opposing team
-                else:
-                    # Search through the opposing team's characters
-                    for other_cid in opposing_team:
-                        charid_pair = other_cid
-                        # If last message's charid matches a member of this team, prioritize theirs
-                        if (
-                            self.client.area.last_ic_message is not None
-                            and other_cid == self.client.area.last_ic_message[8]
-                        ):
-                            break
-                # If our pair opponent is found
-                if charid_pair != -1:
-                    # Search through clients in area
-                    for target in self.client.area.clients:
-                        # If we find our target char ID
-                        if target.char_id == charid_pair:
-                            # Set emote, flip and folder properly
-                            other_emote = target.last_sprite
-                            other_flip = target.flip
-                            other_folder = target.claimed_folder
-                            break
-                    # Speaker always goes in front
-                    charid_pair = f"{charid_pair}^0"
 
         # Additive only works on same-char messages
         if additive and (
@@ -1204,37 +1161,37 @@ class AOProtocol(asyncio.Protocol):
             additive = 0
 
         self.client.area.send_ic(
-            self.client,
-            msg_type,
-            pre,
-            folder,
-            anim,
-            msg,
-            pos,
-            sfx,
-            emote_mod,
-            cid,
-            sfx_delay,
-            button,
-            evidence,
-            flip,
-            ding,
-            color,
-            showname,
-            charid_pair,
-            other_folder,
-            other_emote,
-            offset_pair,
-            other_offset,
-            other_flip,
-            nonint_pre,
-            sfx_looping,
-            screenshake,
-            frames_shake,
-            frames_realization,
-            frames_sfx,
-            additive,
-            effect,
+            client=self.client,
+            msg_type=msg_type,
+            pre=pre,
+            folder=folder,
+            anim=anim,
+            msg=msg,
+            pos=pos,
+            sfx=sfx,
+            emote_mod=emote_mod,
+            cid=cid,
+            sfx_delay=sfx_delay,
+            button=button,
+            evidence=evidence,
+            flip=flip,
+            ding=ding,
+            color=color,
+            showname=showname,
+            charid_pair=charid_pair,
+            other_folder=other_folder,
+            other_emote=other_emote,
+            offset_pair=offset_pair,
+            other_offset=other_offset,
+            other_flip=other_flip,
+            nonint_pre=nonint_pre,
+            sfx_looping=sfx_looping,
+            screenshake=screenshake,
+            frames_shake=frames_shake,
+            frames_realization=frames_realization,
+            frames_sfx=frames_sfx,
+            additive=additive,
+            effect=effect,
             targets=whisper_clients,
         )
         self.client.area.send_owner_ic(
@@ -1347,14 +1304,13 @@ class AOProtocol(asyncio.Protocol):
                 False,
             )
 
-        # All validation checks passed, set the name
-        if self.client.name != args[0] and self.client.fake_name != args[0]:
-            if self.client.is_valid_name(args[0]):
-                self.client.name = args[0]
-                self.client.fake_name = args[0]
-            else:
-                self.client.fake_name = args[0]
+        if not self.client.is_valid_name(args[0]):
+            self.client.send_ooc(
+                "Your OOC name is invalid!"
+            )
+            return
 
+        self.client.name = args[0]
         if args[1].lstrip() != args[1] and args[1].lstrip().startswith("/"):
             self.client.send_ooc(
                 "Your message was not sent for safety reasons: you left space before that slash."
@@ -1416,7 +1372,7 @@ class AOProtocol(asyncio.Protocol):
         if not self.client.is_checked:
             return
 
-        if args[0].split(":")[0] == "[HUB":
+        if args[0].split()[0].startswith("🌍["):
             # self.client.send_ooc('Switching to the list of Hubs...')
             self.client.viewing_hub_list = True
             preflist = self.client.server.supported_features.copy()
@@ -1431,7 +1387,7 @@ class AOProtocol(asyncio.Protocol):
             self.client.send_command(
                 "FA",
                 *[
-                    "{ Hubs }\n Double-Click me to see Areas\n  _______",
+                    "🌐 Hubs 🌐\n Double-Click me to see Areas\n  _______",
                     *[
                         f"[{hub.id}] {hub.name} (users: {hub.count})"
                         for hub in self.client.server.hub_manager.hubs
@@ -1439,7 +1395,7 @@ class AOProtocol(asyncio.Protocol):
                 ],
             )
             return
-        if args[0].split("\n")[0] == "{ Hubs }":
+        if args[0].split("\n")[0] == "🌐 Hubs 🌐":
             # self.client.send_ooc('Switching to the list of Areas...')
             self.client.viewing_hub_list = False
             preflist = self.client.server.supported_features.copy()

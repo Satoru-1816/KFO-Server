@@ -140,6 +140,9 @@ class AreaManager:
         self.char_list_ref = ""
         self.char_list = self.server.char_list
 
+        # Subtheme for this hub
+        self.subtheme = ""
+
         self.timer = self.Timer()
 
     @property
@@ -224,10 +227,7 @@ class AreaManager:
                         self.load_music(
                             f"storage/musiclists/{hub[entry]}.yaml")
                 if entry == "char_list_ref":
-                    if hub[entry] == "":
-                        self.char_list = self.server.char_list
-                    else:
-                        self.load_characters(hub[entry])
+                    self.load_characters(hub[entry])
 
         if not ("character_data" in ignore) and "character_data" in hub:
             try:
@@ -255,11 +255,24 @@ class AreaManager:
 
     def load_characters(self, charlist):
         """Load the character list from a YAML file."""
-        with open(f"storage/charlists/{charlist}.yaml", "r", encoding="utf-8") as chars:
-            self.char_list = yaml.safe_load(chars)
-        # self.char_emotes = {char: Emotes(char) for char in self.char_list}
-        for client in self.clients:
-            self.send_characters(client)
+        need_update = False
+        if charlist == "":
+            if self.char_list != self.server.char_list:
+                self.char_list = self.server.char_list
+                need_update = True
+        else:
+            new_chars = None
+            with open(f"storage/charlists/{charlist}.yaml", "r", encoding="utf-8") as chars:
+                new_chars = yaml.safe_load(chars)
+
+            if self.char_list != new_chars:
+                self.char_list = new_chars
+                need_update = True
+        if need_update:
+            # self.char_emotes = {char: Emotes(char) for char in self.char_list}
+            for client in self.clients:
+                self.send_characters(client)
+                client.char_select()
 
     def send_characters(self, client):
         client.send_command("SC", *self.char_list)
@@ -326,7 +339,8 @@ class AreaManager:
     def load_music(self, path):
         try:
             if not os.path.isfile(path):
-                raise AreaError(f"File path {path} is invalid!")
+                raise AreaError(
+                    f"Hub {self.name} trying to load music list: File path {path} is invalid!")
             with open(path, "r", encoding="utf-8") as stream:
                 music_list = yaml.safe_load(stream)
 
@@ -362,7 +376,8 @@ class AreaManager:
             with open(path, "r") as chars:
                 data = yaml.safe_load(chars)
         except Exception:
-            raise AreaError(f"File path {path} is invalid!")
+            raise AreaError(
+                f"Hub {self.name} trying to load character data: File path {path} is invalid!")
 
         try:
             for char in data.copy():
@@ -385,7 +400,8 @@ class AreaManager:
                 yaml.dump(self.character_data, stream,
                           default_flow_style=False)
         except Exception:
-            raise AreaError(f"File path {path} is invalid!")
+            raise AreaError(
+                f"Hub {self.name} trying to save character data: File path {path} is invalid!")
 
     def get_character_data(self, char, key, default_value=None):
         """
@@ -605,7 +621,9 @@ class AreaManager:
         """Broadcast ARUP packet containing player counts."""
         if not self.arup_enabled:
             return
-        players_list = [0, -1]
+        players_list = [0]
+        if len(self.server.hub_manager.hubs) > 1:
+            players_list = [0, -1]
         if clients is None:
             clients = self.clients
         for client in clients:
@@ -624,14 +642,17 @@ class AreaManager:
                             and not c.hidden
                         ):
                             playerhubcount = playerhubcount + 1
-                players_list[1] = playerhubcount
+                if len(self.server.hub_manager.hubs) > 1:
+                    players_list[1] = playerhubcount
             self.server.send_arup(client, players_list)
 
     def send_arup_status(self, clients=None):
         """Broadcast ARUP packet containing area statuses."""
         if not self.arup_enabled:
             return
-        status_list = [1, "GAMING"]
+        status_list = [1]
+        if len(self.server.hub_manager.hubs) > 1:
+            status_list = [1, "GAMING"]
         if clients is None:
             clients = self.clients
         for client in clients:
@@ -646,7 +667,9 @@ class AreaManager:
         """Broadcast ARUP packet containing area CMs."""
         if not self.arup_enabled:
             return
-        cms_list = [2, "Double-Click for Hubs"]
+        cms_list = [2]
+        if len(self.server.hub_manager.hubs) > 1:
+            cms_list = [2, "Double-Click for Hubs"]
         if clients is None:
             clients = self.clients
         for client in clients:
@@ -661,7 +684,9 @@ class AreaManager:
         """Broadcast ARUP packet containing the lock status of each area."""
         if not self.arup_enabled:
             return
-        lock_list = [3, ""]
+        lock_list = [3]
+        if len(self.server.hub_manager.hubs) > 1:
+            lock_list = [3, ""]
         if clients is None:
             clients = self.clients
         for client in clients:

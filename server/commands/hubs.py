@@ -15,6 +15,7 @@ __all__ = [
     # Saving/loading
     "ooc_cmd_save_hub",
     "ooc_cmd_load_hub",
+    "ooc_cmd_overlay_hub",
     "ooc_cmd_list_hubs",
     "ooc_cmd_clear_hub",
     "ooc_cmd_rename_hub",
@@ -44,6 +45,7 @@ __all__ = [
     "ooc_cmd_ungm",
     "ooc_cmd_broadcast",
     "ooc_cmd_clear_broadcast",
+    "ooc_cmd_hpset",
 ]
 
 
@@ -154,38 +156,74 @@ def ooc_cmd_load_hub(client, arg):
     """
     if arg == "" and not client.is_mod:
         raise ArgumentError("You must be authorized to load the default hub!")
-    try:
-        if arg != "":
-            path = "storage/hubs"
-            arg = f"{path}/{arg}.yaml"
-            if not os.path.isfile(arg):
-                raise ArgumentError(f"File not found: {arg}")
-            with open(arg, "r", encoding="utf-8") as stream:
-                hub = yaml.safe_load(stream)
-            client.area.area_manager.load(hub, ignore=["can_gm", "max_areas"])
-            client.send_ooc(f"Loading as {arg}...")
-            client.area.area_manager.send_arup_status()
-            client.area.area_manager.send_arup_cms()
-            client.area.area_manager.send_arup_lock()
-            client.server.client_manager.refresh_music(
-                client.area.area_manager.clients)
-            client.send_ooc("Success, sending ARUP and refreshing music...")
-        else:
-            client.server.hub_manager.load()
-            client.send_ooc("Loading all Hubs from areas.yaml...")
-            clients = set()
-            for hub in client.server.hub_manager.hubs:
-                hub.send_arup_status()
-                hub.send_arup_cms()
-                hub.send_arup_lock()
-                clients = clients | hub.clients
-            client.server.client_manager.refresh_music(clients)
-            client.send_ooc("Success, sending ARUP and refreshing music...")
 
-    except Exception as ex:
-        msg = f"There is a problem: {ex}"
-        msg += "\nContact the server owner for support."
-        client.send_ooc(msg)
+    if arg != "":
+        path = "storage/hubs"
+        arg = f"{path}/{arg}.yaml"
+        if not os.path.isfile(arg):
+            raise ArgumentError(f"File not found: {arg}")
+        with open(arg, "r", encoding="utf-8") as stream:
+            hub = yaml.safe_load(stream)
+        client.server.hub_manager.load(hub_id=client.area.area_manager.id)
+        client.area.area_manager.broadcast_ooc("Hub clearing initiated...")
+        client.area.area_manager.load(hub, ignore=["can_gm", "max_areas"])
+        client.send_ooc(f"Success, loading as {arg}...")
+        client.area.area_manager.send_arup_status()
+        client.area.area_manager.send_arup_cms()
+        client.area.area_manager.send_arup_lock()
+        client.server.client_manager.refresh_music(
+            client.area.area_manager.clients)
+        client.send_ooc("Success, sending ARUP and refreshing music...")
+    else:
+        client.server.hub_manager.load(hub_id=client.area.area_manager.id)
+        client.area.area_manager.broadcast_ooc("Hub clearing initiated...")
+        client.server.hub_manager.load()
+        client.send_ooc("Success, loading all Hubs from areas.yaml...")
+        clients = set()
+        for hub in client.server.hub_manager.hubs:
+            hub.send_arup_status()
+            hub.send_arup_cms()
+            hub.send_arup_lock()
+            clients = clients | hub.clients
+        client.server.client_manager.refresh_music(clients)
+        client.send_ooc("Success, sending ARUP and refreshing music...")
+
+
+@mod_only(hub_owners=True)
+def ooc_cmd_overlay_hub(client, arg):
+    """
+    Overlay Hub data from the server's storage/hubs/<name>.yaml file over the current hub.
+    Usage: /overlay_hub <name>
+    """
+    if arg == "" and not client.is_mod:
+        raise ArgumentError("You must be authorized to load the default hub!")
+
+    if arg != "":
+        path = "storage/hubs"
+        arg = f"{path}/{arg}.yaml"
+        if not os.path.isfile(arg):
+            raise ArgumentError(f"File not found: {arg}")
+        with open(arg, "r", encoding="utf-8") as stream:
+            hub = yaml.safe_load(stream)
+        client.area.area_manager.load(hub, ignore=["can_gm", "max_areas"])
+        client.send_ooc(f"Overlaying as {arg}...")
+        client.area.area_manager.send_arup_status()
+        client.area.area_manager.send_arup_cms()
+        client.area.area_manager.send_arup_lock()
+        client.server.client_manager.refresh_music(
+            client.area.area_manager.clients)
+        client.send_ooc("Success, sending ARUP and refreshing music...")
+    else:
+        client.server.hub_manager.load()
+        client.send_ooc("Overlaying all Hubs from areas.yaml...")
+        clients = set()
+        for hub in client.server.hub_manager.hubs:
+            hub.send_arup_status()
+            hub.send_arup_cms()
+            hub.send_arup_lock()
+            clients = clients | hub.clients
+        client.server.client_manager.refresh_music(clients)
+        client.send_ooc("Success, sending ARUP and refreshing music...")
 
 
 @mod_only()
@@ -379,6 +417,7 @@ def ooc_cmd_area_pref(client, arg):
         "jukebox",
         "non_int_pres_only",
         "blankposting_allowed",
+        "blankposting_forced",
         "hide_clients",
         "music_autoplay",
         "replace_music",
@@ -394,6 +433,7 @@ def ooc_cmd_area_pref(client, arg):
         "can_panic_talk_action",
         "bg_lock",
         "force_sneak",
+        "present_reveals_evidence",
     ]
 
     if len(arg) == 0:
@@ -629,21 +669,31 @@ def ooc_cmd_unhide_clients(client, arg):
 @mod_only(hub_owners=True)
 def ooc_cmd_force_follow(client, arg):
     """
-    Force someone to follow you. Follow me!
-    Usage: /force_follow <id>
+    Force someone to follow you, or someone else. Follow me!
+    Usage: /force_follow <victim_id> [target_id]
     """
+    arg = arg.split()
     if len(arg) == 0:
         raise ArgumentError(
-            "You must specify a target. Use /force_follow <id>.")
+            "You must specify a victim. Usage: /force_follow <victim_id> [target_id]")
     try:
-        targets = client.server.client_manager.get_targets(
-            client, TargetType.ID, int(arg), False
+        victims = client.server.client_manager.get_targets(
+            client, TargetType.ID, int(arg[0]), False
         )
     except Exception:
         raise ArgumentError(
-            "You must specify a target. Use /force_follow <id>.")
-    if targets:
-        for c in targets:
+            "You must specify a victim. Usage: /force_follow <victim_id> [target_id]")
+    target = client
+    if len(arg) >= 2:
+        try:
+            target = client.server.client_manager.get_targets(
+                client, TargetType.ID, int(arg[1]), False
+            )
+        except Exception:
+            raise ArgumentError(
+                "Invalid target! Usage: /force_follow <victim_id> [target_id]")
+    if victims:
+        for c in victims:
             if client == c:
                 raise ClientError(
                     "You are already forced to follow yourself because you are yourself!"
@@ -654,7 +704,7 @@ def ooc_cmd_force_follow(client, arg):
             if c.area != client.area:
                 c.set_area(client.area)
         client.send_ooc(
-            f"Forced {len(targets)} existing client(s) to follow you.")
+            f"Forced {len(victims)} client(s) to follow [{target.id}] {target.showname}.")
     else:
         client.send_ooc("No targets found.")
 
@@ -713,54 +763,71 @@ def ooc_cmd_follow(client, arg):
 def ooc_cmd_unfollow(client, arg):
     """
     Stop following whoever you are following, or free someone from being forced to follow.
+    If you're not following anyone, using this command will break whoever is following you.
     Usage: /unfollow or /unfollow <id>
     """
+    allowed = client.is_mod or client in client.area.area_manager.owners
     if len(arg) == 0:
         if (
             client.forced_to_follow
-            and not client.is_mod
-            and client not in client.area.area_manager.owners
+            and not allowed
             and client.following is not None
         ):
             raise ClientError("You can't escape being forced to follow!")
-        else:
-            try:
-                client.send_ooc(
-                    f"You are no longer following [{client.following.id}] {client.following.showname}."
-                )
-                client.following = None
-                client.forced_to_follow = False
-            except Exception:
-                client.following = None
-                raise ClientError("You're not following anyone!")
-    else:
-        if client.is_mod or client in client.area.area_manager.owners:
-            try:
-                targets = client.server.client_manager.get_targets(
-                    client, TargetType.ID, int(arg), False
-                )
-            except Exception:
-                raise ArgumentError(
-                    "You must specify a target. Use /follow_me <id>.")
-            if targets:
-                count = 0
-                for c in targets:
-                    if c.forced_to_follow:
-                        c.following = None
-                        c.forced_to_follow = False
-                        c.send_ooc(
-                            "You've been freed from having to follow someone.")
-                        count += 1
-                if count == 0:
-                    client.send_ooc("No valid targets found.")
-                else:
-                    client.send_ooc(
-                        f"Freed {count} existing client(s) from having to follow someone."
-                    )
+        try:
+            client.send_ooc(
+                f"You are no longer following [{client.following.id}] {client.following.showname}."
+            )
+            client.following = None
+            client.forced_to_follow = False
+        except Exception:
+            client.following = None
+            counter = 0
+            for c in client.area.area_manager.clients:
+                if (
+                    # Target is following us
+                    c.following == client
+                    # Target is not mod or area owner, OR we are a mod/hub owner giving us ability to stop them from following
+                    and ((not c.is_mod and c not in c.area.area_manager.owners) or allowed)
+                    # Target is in the same area as us, OR we are a mod/hub owner
+                    and (c in client.area.clients or allowed)
+                    # Target is not forced to follow us, OR we area a mod/hub owner
+                    and (not c.forced_to_follow or allowed)
+                ):
+                    # Break their follow
+                    c.unfollow()
+                    counter += 1
+            msg = f" Made {counter} clients stop following you." if counter > 0 else ""
+            client.send_ooc(f"Not following anyone.{msg}")
+        return
+
+    if client.is_mod or client in client.area.area_manager.owners:
+        try:
+            targets = client.server.client_manager.get_targets(
+                client, TargetType.ID, int(arg), False
+            )
+        except Exception:
+            raise ArgumentError(
+                "You must specify a target. Use /follow_me <id>.")
+        if targets:
+            count = 0
+            for c in targets:
+                if c.forced_to_follow:
+                    c.following = None
+                    c.forced_to_follow = False
+                    c.send_ooc(
+                        "You've been freed from having to follow someone.")
+                    count += 1
+            if count == 0:
+                client.send_ooc("No valid targets found.")
             else:
-                client.send_ooc("No targets found.")
+                client.send_ooc(
+                    f"Freed {count} existing client(s) from having to follow someone."
+                )
         else:
-            ooc_cmd_unfollow(client, "")
+            client.send_ooc("No targets found.")
+    else:
+        ooc_cmd_unfollow(client, "")
 
 
 def ooc_cmd_info(client, arg):
@@ -912,3 +979,37 @@ def ooc_cmd_clear_broadcast(client, arg):
         return
     client.broadcast_list.clear()
     client.send_ooc("Your broadcast list has been cleared.")
+
+
+@mod_only(area_owners=True)
+def ooc_cmd_hpset(client, arg):
+    """
+    Set hp in area or multiple areas.
+    To include all areas, use set [area] to all.
+    Usage: /hpset <pos> <amount> [area]
+    """
+    args = list(arg.split(" "))
+    if len(args) == 0:
+        raise ArgumentError(
+            "You must specify a position and HP. Use /hpset <pos> <amount> [area]")
+    elif len(args) == 1:
+        raise ArgumentError(
+            "You must specify HP. Use /hpset <pos> <amount> [area]")
+
+    if args[0] == "def":
+        side = 1
+    elif args[0] == "pro":
+        side = 2
+    else:
+        raise ArgumentError(
+            "Invalid position. Use \"pro\" or \"def\"")
+
+    if len(args) == 2:
+        client.area.change_hp(side, int(args[1]))
+    elif args[2] == "all":
+        for area in client.area.area_manager.areas:
+            area.change_hp(side, int(args[1]))
+    else:
+        for aid in args[2:]:
+            area = client.area.area_manager.get_area_by_id(int(aid))
+            area.change_hp(side, int(args[1]))
