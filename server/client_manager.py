@@ -22,6 +22,7 @@ import string
 import time
 import math
 import os
+import urllib
 from heapq import heappop, heappush
 
 
@@ -599,7 +600,7 @@ class ClientManager:
                         continue
 
                     for song in item["songs"]:
-                        song["name"] = prepath + song["name"]
+                        song["name"] = prepath + urllib.parse.unquote(song["name"])
                 self.music_list = music_list
             except ValueError:
                 raise
